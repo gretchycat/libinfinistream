@@ -93,8 +93,8 @@ fun copy(source: ByteSource, sink: ByteSink, cancellation: CancellationToken = C
     while (true) {
         cancellation.check()
         val n = source.read(buffer)
-        if (n < 0) break
-        if (n == 0 || n > buffer.size) throw IOException("Source made no progress")
+        if (n == -1) break
+        if (n < -1 || n == 0 || n > buffer.size) throw IOException("Source made no progress")
         if (total > Long.MAX_VALUE - n) throw IOException("Stream byte count overflow")
         cancellation.check(); sink.write(buffer, 0, n); total += n
         progress?.update(StreamProgress(total, source.metadata.length))

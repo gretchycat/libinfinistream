@@ -5,9 +5,11 @@ import java.io.IOException
 
 enum class FlowMode { PULL, PUSH }
 data class PortDescriptor(val name: String, val kinds: Set<DataKind>, val formats: Set<String> = emptySet(),
-    val capabilities: Set<Capability> = emptySet(), val multiple: Boolean = false) {
+    val capabilities: Set<Capability> = emptySet(), val multiple: Boolean = false,
+    val attributes: Map<String, String> = emptyMap()) {
     fun accepts(metadata: StreamMetadata) = metadata.content.kind in kinds &&
-        (formats.isEmpty() || metadata.content.format in formats) && metadata.capabilities.containsAll(capabilities)
+        (formats.isEmpty() || metadata.content.format in formats) && metadata.capabilities.containsAll(capabilities) &&
+        attributes.all { (key, value) -> metadata.attributes[key] == value }
 }
 data class ProcessorDescriptor(val id: String, val inputs: List<PortDescriptor>, val outputs: List<PortDescriptor>,
     val modes: Set<FlowMode> = setOf(FlowMode.PULL), val options: Set<String> = emptySet()) {
@@ -86,6 +88,58 @@ class ProcessorRegistry(registrations: List<ProcessorRegistration>) {
             val handles = inputs.getValue(port.name)
             if (handles.isEmpty() || (!port.multiple && handles.size != 1) || handles.any { !port.accepts(it.metadata) }) throw IOException("Incompatible input: ${port.name}")
         }
-        return registration.processor.open(inputs, options)
+        val session = registration.processor.open(inputs, options)
+        try {
+            if (session.outputs.keys != descriptor.outputs.map { it.name }.toSet()) throw IOException("Output ports do not match")
+            descriptor.outputs.forEach { port ->
+                val handles = session.outputs.getValue(port.name)
+                if ((!port.multiple && handles.size != 1) || handles.any { !port.accepts(it.metadata) }) throw IOException("Incompatible actual output: ${port.name}")
+            }
+            options.cancellation.check()
+            return session
+        } catch (error: Throwable) {
+            try { session.close() } catch (close: Throwable) { error.addSuppressed(close) }
+            throw error
+        }
+    }
+
+    /** Explicit pull execution. Input is borrowed; transformed outputs are session-owned. A zero-step route returns that borrowed input. */
+    fun openPipeline(source: StreamHandle, target: PortDescriptor, options: ProcessorOptions = ProcessorOptions(),
+        allowedBackends: Set<String>? = null, maxDepth: Int = 8, maxStates: Int = 128): ProcessorSession {
+        val route = plan(source.metadata, target, options, allowedBackends, maxDepth, maxStates)
+            ?: throw IOException("No compatible processor route")
+        val sessions = mutableListOf<ProcessorSession>()
+        var current = source
+        try {
+            route.forEachIndexed { index, step ->
+                options.cancellation.check()
+                val input = step.processor.descriptor.inputs.single()
+                val session = open(step.processor.descriptor.id, mapOf(input.name to listOf(current)), options)
+                sessions += session
+                val next = route.getOrNull(index + 1)?.processor?.descriptor?.inputs?.single() ?: target
+                val compatible = session.outputs.values.flatten().filter { next.accepts(it.metadata) }
+                if (compatible.size != 1) throw IOException("Ambiguous or incompatible pipeline output; explicit port bindings are required")
+                current = compatible.single()
+            }
+            if (!target.accepts(current.metadata)) throw IOException("Actual pipeline output does not satisfy target")
+            val output = current
+            return object : ProcessorSession {
+                private var closed = false
+                override val outputs = mapOf(target.name to listOf(output))
+                override fun pollEvents(): List<StreamEvent> = sessions.flatMap { it.pollEvents() }
+                override fun close() {
+                    if (closed) return
+                    closed = true
+                    var failure: Throwable? = null
+                    for (session in sessions.asReversed()) try { session.close() } catch (error: Throwable) {
+                        if (failure == null) failure = error else failure.addSuppressed(error)
+                    }
+                    failure?.let { throw it }
+                }
+            }
+        } catch (error: Throwable) {
+            for (session in sessions.asReversed()) try { session.close() } catch (close: Throwable) { error.addSuppressed(close) }
+            throw error
+        }
     }
 }
