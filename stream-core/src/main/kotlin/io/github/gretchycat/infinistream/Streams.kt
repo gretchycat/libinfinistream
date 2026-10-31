@@ -30,7 +30,7 @@ data class StreamMetadata(val content: ContentType = ContentType(), val name: St
 interface StreamMetadataCarrier { val metadata: StreamMetadata }
 interface StreamHandle : Closeable, StreamMetadataCarrier { override val metadata: StreamMetadata }
 interface ByteSource : StreamHandle {
-    /** -1 at EOF; zero only for length=0. Positive short reads are legal. */
+    /** Implementations advertise READ. -1 at EOF; zero only for length=0. Positive short reads are legal. */
     fun read(buffer: ByteArray, offset: Int = 0, length: Int = buffer.size - offset): Int
 }
 interface PositionalReadable {
@@ -68,7 +68,7 @@ fun requireRange(position: Long, buffer: ByteArray, offset: Int, length: Int) {
 class SourceCursor(private val input: PositionalReadable, metadata: StreamMetadata,
     private val owner: Closeable? = null) : ByteSource {
     override val metadata = metadata.copy(
-        capabilities = (metadata.capabilities intersect setOf(Capability.READ, Capability.KNOWN_LENGTH)) + Capability.SEEK,
+        capabilities = setOf(Capability.READ, Capability.SEEK) + if (metadata.length != null) setOf(Capability.KNOWN_LENGTH) else emptySet(),
         ownership = if (owner == null) Ownership.BORROWED else Ownership.OWNED, concurrency = Concurrency.SERIAL)
     var position: Long = 0
         private set

@@ -14,6 +14,9 @@ class ProcessingTest {
         val sink = OutputStreamSink(ByteArrayOutputStream(), hints, ownsOutput = false)
         assertEquals(setOf(Capability.WRITE, Capability.FLUSH), sink.metadata.capabilities)
         assertEquals(Ownership.BORROWED, sink.metadata.ownership)
+        val positional = object : PositionalReadable { override fun readAt(position: Long, buffer: ByteArray, offset: Int, length: Int) = -1 }
+        val cursor = SourceCursor(positional, StreamMetadata(length = 10))
+        assertEquals(setOf(Capability.READ, Capability.SEEK, Capability.KNOWN_LENGTH), cursor.metadata.capabilities)
     }
     private fun registration(id: String, from: DataKind, to: DataKind, closes: MutableList<String>, bad: Boolean = false): ProcessorRegistration {
         val processor = object : StreamProcessor {
