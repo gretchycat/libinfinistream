@@ -27,3 +27,5 @@ This JVM artifact supports JVM hosts; native iOS bindings are not provided.
 Original-code licensing is pending owner selection: see LICENSE.md.
 
 Sequential JVM wrappers normalize capabilities/ownership from their demonstrated interfaces, so supplied hints cannot accidentally advertise positional writes or seeking. File factories advertise reopening; individual open file handles advertise their own read/positional capabilities. All consumer/source errors remain errors, including invalid EOF values.
+
+`StreamMetadataCarrier` keeps provenance and warnings across the ByteSource-to-InputStream compatibility adapter. Wrapping that stream back into InputStreamSource inherits the snapshot while recalculating sequential capabilities and ownership. Metadata derivation reads one immutable snapshot per operation rather than combining fields from different updates.

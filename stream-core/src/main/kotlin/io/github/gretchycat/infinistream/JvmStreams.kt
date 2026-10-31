@@ -5,7 +5,7 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 
 class InputStreamSource(private val input: InputStream,
-    metadata: StreamMetadata = StreamMetadata(capabilities = setOf(Capability.READ)),
+    metadata: StreamMetadata = (input as? StreamMetadataCarrier)?.metadata ?: StreamMetadata(capabilities = setOf(Capability.READ)),
     private val ownsInput: Boolean = true,
     private val cancellation: CancellationToken = CancellationToken.NONE) : ByteSource {
     override val metadata = metadata.copy(
@@ -35,7 +35,13 @@ class OutputStreamSink(private val output: OutputStream,
     override fun flush() { if (closed) throw IOException("Sink is closed"); output.flush() }
     override fun close() { if (!closed) { closed = true; if (ownsOutput) output.close() } }
 }
-fun ByteSource.asInputStream(ownsSource: Boolean = true): InputStream = object : InputStream() {
+fun ByteSource.asInputStream(ownsSource: Boolean = true): InputStream = object : InputStream(), StreamMetadataCarrier {
+    override val metadata get(): StreamMetadata {
+        val snapshot = this@asInputStream.metadata
+        return snapshot.copy(
+            capabilities = setOf(Capability.READ) + if (snapshot.length != null) setOf(Capability.KNOWN_LENGTH) else emptySet(),
+            ownership = if (ownsSource) Ownership.OWNED else Ownership.BORROWED, concurrency = Concurrency.SERIAL)
+    }
     private var closed = false
     override fun read(): Int { val b = ByteArray(1); return if (read(b, 0, 1) == -1) -1 else b[0].toInt() and 255 }
     override fun read(b: ByteArray, off: Int, len: Int): Int {

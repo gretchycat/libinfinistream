@@ -62,4 +62,16 @@ class ProcessingTest {
         assertFalse(closed)
         assertThrows(IOException::class.java) { copy(input, OutputStreamSink(ByteArrayOutputStream())) }
     }
+    @Test fun legacyInputStreamRoundTripPreservesMetadataWithoutInventingPositionalAccess() {
+        val input = InputStreamSource("bytes".byteInputStream(), StreamMetadata(name = "original", length = 5,
+            provenance = Provenance(source = "fixture://source"), warnings = listOf("unverified source")))
+        val legacy = input.asInputStream(ownsSource = false)
+        val restored = InputStreamSource(legacy, ownsInput = false)
+        assertEquals("fixture://source", restored.metadata.provenance.source)
+        assertEquals(listOf("unverified source"), restored.metadata.warnings)
+        assertEquals(setOf(Capability.READ, Capability.KNOWN_LENGTH), restored.metadata.capabilities)
+        assertEquals("bytes", restored.asInputStream(false).readBytes().decodeToString())
+        restored.close(); input.close()
+    }
+
 }

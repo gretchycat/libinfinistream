@@ -27,7 +27,8 @@ data class StreamMetadata(val content: ContentType = ContentType(), val name: St
 }
 
 /** All typed handles carry actual output metadata; no CPU byte conversion is required. */
-interface StreamHandle : Closeable { val metadata: StreamMetadata }
+interface StreamMetadataCarrier { val metadata: StreamMetadata }
+interface StreamHandle : Closeable, StreamMetadataCarrier { override val metadata: StreamMetadata }
 interface ByteSource : StreamHandle {
     /** -1 at EOF; zero only for length=0. Positive short reads are legal. */
     fun read(buffer: ByteArray, offset: Int = 0, length: Int = buffer.size - offset): Int
