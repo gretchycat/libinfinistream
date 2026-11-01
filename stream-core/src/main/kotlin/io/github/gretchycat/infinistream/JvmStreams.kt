@@ -75,3 +75,31 @@ private class FileSource(file: File, override val metadata: StreamMetadata) : By
     }
     override fun close() { channel.close() }
 }
+
+/** JVM compatibility edge: streams are borrowed, with the same bounded copy contract as common handles. */
+fun copy(input: InputStream, output: OutputStream, cancellation: CancellationToken = CancellationToken.NONE,
+    progress: ProgressObserver? = null, bufferSize: Int = 64 * 1024, maxBytes: Long? = null): Long =
+    InputStreamSource(input, ownsInput = false).use { source ->
+        OutputStreamSink(output, ownsOutput = false).use { sink ->
+            copy(source, sink, cancellation, progress, bufferSize, maxBytes)
+        }
+    }
+
+/** Reads encoded bytes under an explicit caller budget; the source remains borrowed. */
+fun readBytes(source: ByteSource, maxBytes: Int, cancellation: CancellationToken = CancellationToken.NONE): ByteArray {
+    require(maxBytes >= 0)
+    val output = ByteArrayOutputStream(minOf(maxBytes, 8192))
+    val sink = object : ByteSink {
+        override val metadata = StreamMetadata(capabilities = setOf(Capability.WRITE))
+        override fun write(buffer: ByteArray, offset: Int, length: Int) {
+            output.write(buffer, offset, length)
+        }
+        override fun close() {}
+    }
+    copy(source, sink, cancellation, maxBytes = maxBytes.toLong())
+    return output.toByteArray()
+}
+
+/** Borrowed JVM compatibility edge for bounded in-memory reads. */
+fun readBytes(input: InputStream, maxBytes: Int, cancellation: CancellationToken = CancellationToken.NONE): ByteArray =
+    InputStreamSource(input, ownsInput = false).use { readBytes(it, maxBytes, cancellation) }

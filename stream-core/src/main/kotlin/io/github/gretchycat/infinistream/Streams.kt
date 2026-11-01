@@ -88,7 +88,8 @@ class SourceCursor(private val input: PositionalReadable, metadata: StreamMetada
 
 /** Blocking pull copy: at most one chunk in flight, preserving downstream backpressure. */
 fun copy(source: ByteSource, sink: ByteSink, cancellation: CancellationToken = CancellationToken.NONE,
-    progress: ProgressObserver? = null, bufferSize: Int = 64 * 1024): Long {
+    progress: ProgressObserver? = null, bufferSize: Int = 64 * 1024, maxBytes: Long? = null): Long {
+    require(maxBytes == null || maxBytes >= 0)
     require(bufferSize in 1..(1024 * 1024))
     val buffer = ByteArray(bufferSize); var total = 0L
     while (true) {
@@ -97,8 +98,12 @@ fun copy(source: ByteSource, sink: ByteSink, cancellation: CancellationToken = C
         if (n == -1) break
         if (n < -1 || n == 0 || n > buffer.size) throw IOException("Source made no progress")
         if (total > Long.MAX_VALUE - n) throw IOException("Stream byte count overflow")
+        if (maxBytes != null && total + n > maxBytes) throw StreamLimitExceededException(maxBytes)
         cancellation.check(); sink.write(buffer, 0, n); total += n
         progress?.update(StreamProgress(total, source.metadata.length))
     }
     return total
 }
+
+/** A bounded operation fails explicitly rather than publishing a truncated success. */
+class StreamLimitExceededException(val maxBytes: Long) : IOException("Input exceeds $maxBytes bytes")

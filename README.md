@@ -31,3 +31,15 @@ Sequential JVM wrappers normalize capabilities/ownership from their demonstrated
 `StreamMetadataCarrier` keeps provenance and warnings across the ByteSource-to-InputStream compatibility adapter. Wrapping that stream back into InputStreamSource inherits the snapshot while recalculating sequential capabilities and ownership. Metadata derivation reads one immutable snapshot per operation rather than combining fields from different updates.
 
 The current standalone build has 26 passing cases. Eight shared-positional cases cover independent borrowed cursors, one-snapshot metadata, bounded EOF/short reads, unsupported construction, invalid results/errors, owner/view closure, interruption and serialized provider access.
+
+## Bounded transfer and materialization
+
+`copy(ByteSource, ByteSink)` and its JVM `InputStream`/`OutputStream` overload
+borrow both endpoints, validate positive short reads, check cancellation between
+calls, and report bytes only after a successful write. The optional `maxBytes`
+budget throws `StreamLimitExceededException` before writing a chunk that would
+exceed it; partial destination writes require the caller's existing rollback or
+publication policy. Copy does not flush or close borrowed endpoints.
+`readBytes(source, maxBytes)` explicitly materializes under a mandatory budget;
+exact-limit and empty inputs succeed, oversized inputs fail without returning a
+truncated document. Neither helper promises transport-level interruption.
