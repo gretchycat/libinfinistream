@@ -86,9 +86,14 @@ class SourceCursor(private val input: PositionalReadable, metadata: StreamMetada
     override fun close() { if (!closed) { closed = true; owner?.close() } }
 }
 
+/** Retain the original JVM entry point for existing compiled consumers. */
+fun copy(source: ByteSource, sink: ByteSink, cancellation: CancellationToken = CancellationToken.NONE,
+    progress: ProgressObserver? = null, bufferSize: Int = 64 * 1024): Long =
+    copy(source, sink, cancellation, progress, bufferSize, maxBytes = null)
+
 /** Blocking pull copy: at most one chunk in flight, preserving downstream backpressure. */
 fun copy(source: ByteSource, sink: ByteSink, cancellation: CancellationToken = CancellationToken.NONE,
-    progress: ProgressObserver? = null, bufferSize: Int = 64 * 1024, maxBytes: Long? = null): Long {
+    progress: ProgressObserver? = null, bufferSize: Int = 64 * 1024, maxBytes: Long?): Long {
     require(maxBytes == null || maxBytes >= 0)
     require(bufferSize in 1..(1024 * 1024))
     val buffer = ByteArray(bufferSize); var total = 0L

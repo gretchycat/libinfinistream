@@ -62,4 +62,10 @@ class JvmCopyTest {
         assertThrows(StreamLimitExceededException::class.java) { readBytes(Input(byteArrayOf(1)), 0) }
         assertThrows(IllegalArgumentException::class.java) { readBytes(Input(byteArrayOf()), -1) }
     }
+    @Test fun originalCompiledCopyEntryPointRemainsAvailable() {
+        val method = Class.forName("io.github.gretchycat.infinistream.StreamsKt").getMethod("copy",
+            ByteSource::class.java, ByteSink::class.java, CancellationToken::class.java,
+            ProgressObserver::class.java, Int::class.javaPrimitiveType)
+        assertEquals(java.lang.Long.TYPE, method.returnType)
+    }
 }
