@@ -1,5 +1,7 @@
 # libinfinistream
 
+Runtime discovery: [handler schema, registration, linked dependencies and limits](CAPABILITIES.md).
+
 Small Kotlin/JVM foundation for the Infini library family. No Android dependency.
 
 Build: `gradle :stream-core:build` (JDK 17+, Gradle 9.7.1, Kotlin 2.2.20).
