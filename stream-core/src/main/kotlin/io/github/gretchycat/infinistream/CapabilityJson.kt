@@ -14,7 +14,16 @@ object CapabilityJson {
                 "availability" to mapOf("state" to (availability?.state?.name?:"NOT_EVALUATED"),"reason" to availability?.reason,
                     "dependencies" to availability?.dependencies.orEmpty()))
         }
+        val supportedFormats=registry.supportedFormats().map { item ->
+            val format=item.format
+            mapOf("handlerId" to item.handlerId,"library" to item.library,"title" to item.title,
+                "operations" to item.operations.sorted(),"attributes" to item.attributes.toSortedMap(),
+                "profileIndex" to item.profileIndex,"mimeTypes" to format.mimeTypes.sorted(),
+                "extensions" to format.extensions.sorted(),"uriSchemes" to format.uriSchemes.sorted(),
+                "magic" to format.magic.map { m ->mapOf("hex" to m.hex,"offset" to m.offset,"description" to m.description) })
+        }
         return json(mapOf("schemaVersion" to 1,"fingerprint" to registry.fingerprint(),"handlers" to handlers,
+            "supportedFormats" to supportedFormats,
             "failures" to registry.discoveryFailures.map{mapOf("provider" to it.provider,"reason" to it.reason)}))
     }
     private fun json(value:Any?):String=when(value){

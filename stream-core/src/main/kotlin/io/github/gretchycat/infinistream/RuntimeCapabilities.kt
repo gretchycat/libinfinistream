@@ -145,6 +145,18 @@ data class DiscoveredCapability(val handler: CapabilityHandler, val availability
     /** Source mutation needs a writable source. EDIT/ENCODE may instead produce a separate output. */
     val operations get() = if (availability.state == AvailabilityState.UNAVAILABLE) emptySet() else probe?.operations ?: descriptor.operations
 }
+
+/** One advertised format profile with its owning handler retained for complete inventories. */
+data class SupportedFormatCapability(
+    val handlerId: String,
+    val library: String,
+    val title: String,
+    val operations: Set<String>,
+    val attributes: Map<String, String>,
+    val profileIndex: Int,
+    val format: FormatSupport
+)
+
 data class DiscoveryFailure(val provider: String, val reason: String)
 
 /** Order is deterministic; overlaps are retained. Mutation callbacks run outside the registry lock. */
@@ -160,6 +172,26 @@ class CapabilityRegistry(val library: String? = null, private val parent: Capabi
     private fun snapshot(): List<CapabilityHandler> = (parent?.snapshot() ?: synchronized(this) { handlers.values.toList() }).filter { library == null || it.descriptor.library == library }
     /** Identity facts only; unlike query(), this does not evaluate runtime availability. */
     fun descriptors(): List<HandlerDescriptor> = snapshot().map { it.describe() }
+    /**
+     * Enumerates every declared format profile, retaining overlapping handlers.
+     * A library-scoped registry returns that library's profiles; the installed
+     * registry returns the complete linked catalog.
+     */
+    fun supportedFormats(operation: String? = null): List<SupportedFormatCapability> =
+        descriptors().flatMap { descriptor ->
+            if (operation != null && operation !in descriptor.operations) emptyList()
+            else descriptor.formats.mapIndexed { index, format ->
+                SupportedFormatCapability(descriptor.id, descriptor.library, descriptor.title,
+                    descriptor.operations, descriptor.attributes, index, format)
+            }
+        }.sortedWith(compareBy<SupportedFormatCapability> { it.library }
+            .thenBy { it.handlerId }.thenBy { it.profileIndex })
+    fun supportedMimeTypes(operation: String? = null): Set<String> =
+        supportedFormats(operation).flatMapTo(sortedSetOf()) { it.format.mimeTypes }
+    fun supportedExtensions(operation: String? = null): Set<String> =
+        supportedFormats(operation).flatMapTo(sortedSetOf()) { it.format.extensions }
+    fun supportedUriSchemes(operation: String? = null): Set<String> =
+        supportedFormats(operation).flatMapTo(sortedSetOf()) { it.format.uriSchemes }
     /** Stable across process restarts; revision remains the in-process invalidation token. */
     fun fingerprint():String {
         val current=revision

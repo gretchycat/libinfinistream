@@ -71,6 +71,11 @@ publication policy. Protocol recognition is not a server connection or write gra
   live view of the same registrations. `discover(classLoader)` creates an isolated
   registry. Explicit `CapabilityRegistry()` instances also work without a host.
 - `descriptors()` reads identity facts without initializing optional native codecs.
+- `supportedFormats(operation)` exposes each format profile with its handler ID,
+  library, operations, attributes and profile index. `supportedMimeTypes`,
+  `supportedExtensions` and `supportedUriSchemes` provide flattened selectors.
+  Calling these on `RuntimeCapabilities.library("vault")` returns only Vault's
+  registrations; calling them on `installed()` retains overlapping providers.
 - `query(operation, includeUnavailable)` evaluates only relevant handlers.
 - `probe(CapabilityResource(...), operation, budget, cancellation)` preserves all
   matching candidates, ordered by evidence, selector specificity, priority and ID.
@@ -120,7 +125,8 @@ metadata preserves source provenance while describing the produced image resourc
 ## Export and standalone validation
 
 `CapabilityJson.snapshot(registry)` exports schemaVersion 1 JSON, descriptors,
-availability/dependencies and provider failures. `evaluateAvailability=false`
+the flattened `supportedFormats` profiles, availability/dependencies and provider
+failures. `evaluateAvailability=false`
 exports identity with availability NOT_EVALUATED, suitable for build-time Android
 intent filters. It is not a device acceptance report. `CapabilityCatalogMain`
 exports this identity catalog from a dependency classpath without starting an app.
