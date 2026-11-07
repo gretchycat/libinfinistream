@@ -1,6 +1,6 @@
 # Runtime discovery and processing contracts
 
-Updated 2026-11-04. All contracts live in `stream-core`, with no Android or
+Updated 2026-11-07. All contracts live in `stream-core`, with no Android or
 InfiniFolder dependency. Keep the existing Stream I/O and processor APIs: this
 registry selects implementations, not a second decoder or pipeline engine.
 
@@ -63,6 +63,22 @@ validation justifies VERIFIED. Generic probing removes WRITE when the supplied
 resource metadata does not advertise WRITE; EDIT/ENCODE can instead produce a
 separate output. Mutation still checks the opened provider/handle, revision and
 publication policy. Protocol recognition is not a server connection or write grant.
+
+`MetadataCapabilityHandler` adds the `identify` and `metadata` operations and a
+typed `extractMetadata(MetadataReadContext)` method. The context opens and owns a
+fresh source, supports bounded positional reads when the handle implements
+`PositionalReadable`, and otherwise permits only forward reads; skipped bytes count
+against its byte budget. The default limits are 1 MiB, 256 reads and one second,
+with hard ceilings enforced by the context. It never materializes an entire file.
+The result is a `MetadataRecord` with a format ID, effective MIME type, optional
+title, display-ready fields and explicit warnings. A parser reports what it read;
+it must not claim checksum validation or other work it did not perform.
+
+The `libinfinimeta` family supplies `MetadataRegistry.identify` and `inspect` over
+all registered metadata handlers. It preserves overlaps and separates candidates,
+verified formats, extracted records and parser failures. A new parser module
+contributes its own `CapabilityProvider`; registry aggregation does not need a
+format-specific switch. Existing typed metadata APIs can be migrated incrementally.
 
 ## Queries, ownership and limits
 
