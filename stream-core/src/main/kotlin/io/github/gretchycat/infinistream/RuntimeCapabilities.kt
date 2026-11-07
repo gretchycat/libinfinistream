@@ -13,6 +13,7 @@ object Operations {
     const val VIEW = "view"
     const val EDIT = "edit"
     const val THUMBNAIL = "thumbnail"
+    const val IDENTIFY = "identify"
     const val METADATA = "metadata"
     const val LIST = "list"
     const val EXTRACT = "extract"
