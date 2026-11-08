@@ -74,6 +74,14 @@ The result is a `MetadataRecord` with a format ID, effective MIME type, optional
 title, display-ready fields and explicit warnings. A parser reports what it read;
 it must not claim checksum validation or other work it did not perform.
 
+## Format-module validation and metadata requirements
+
+Every new format module must expose content-based confirmation and metadata through its handler. A stable signature can use a bounded magic-byte check; formats without one must validate structure with their real parser (for example, an XML root and track list, text encoding and byte count, or a media header). An extension or MIME association alone is only `CANDIDATE`; it must not become `SIGNATURE` or `VERIFIED` without reading and checking content. If a format has no universal signature and cannot be structurally distinguished, retain candidate confidence and document that limitation.
+
+Implement `MetadataCapabilityHandler.extractMetadata` for format-specific facts the library can parse. Return observed values only: text may report encoding and decoded/byte length; images may report decoded dimensions, bit depth and embedded EXIF when present; audio may report parsed stream properties and tags; archives and documents may report validated structural fields. Leave unavailable fields absent and report partial reads or limitations as warnings. `MetadataRegistry.inspect` also emits generic source length, identity confidence and evidence, so a non-empty record alone does not prove detailed metadata was decoded.
+
+Add tests for each shipped format profile with a usable fixture. Tests must run the real handler probe and metadata extractor against fixture bytes, include malformed or extension-mismatched content, and assert at least one source-derived metadata field. Optional backend absence must not suppress identity or metadata parsing that remains available. When no distributable fixture exists, document the gap and test a small valid input plus a negative input. Do not satisfy this contract with fixed metadata, scripted success, or mocks that return the expected result.
+
 The `libinfinimeta` family supplies `MetadataRegistry.identify` and `inspect` over
 all registered metadata handlers. It preserves overlaps and separates candidates,
 verified formats, extracted records and parser failures. A new parser module

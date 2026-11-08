@@ -173,6 +173,15 @@ class CapabilityRegistry(val library: String? = null, private val parent: Capabi
     private fun snapshot(): List<CapabilityHandler> = (parent?.snapshot() ?: synchronized(this) { handlers.values.toList() }).filter { library == null || it.descriptor.library == library }
     /** Identity facts only; unlike query(), this does not evaluate runtime availability. */
     fun descriptors(): List<HandlerDescriptor> = snapshot().map { it.describe() }
+    /** Handler implementations for a capability operation, without initializing optional dependencies. */
+    fun registeredHandlers(operation: String? = null): List<CapabilityHandler> = snapshot()
+        .filter { operation == null || operation in it.describe().operations }
+        .sortedWith(compareByDescending<CapabilityHandler> { it.describe().priority }.thenBy { it.describe().id })
+    /** Evaluate availability only when an actual resource probe needs the handler. */
+    fun availability(handler: CapabilityHandler): HandlerAvailability {
+        require(snapshot().any { it === handler }) { "Handler is not registered in this capability registry" }
+        return evaluate(handler)
+    }
     /**
      * Enumerates every declared format profile, retaining overlapping handlers.
      * A library-scoped registry returns that library's profiles; the installed
@@ -264,10 +273,22 @@ class CapabilityRegistry(val library: String? = null, private val parent: Capabi
 
     fun probe(resource: CapabilityResource, operation: String? = null, budget: ProbeBudget = ProbeBudget(),
         cancellation: CancellationToken = CancellationToken.NONE): List<DiscoveredCapability> =
-        probe(CapabilityProbeContext(resource,budget,cancellation),operation)
+        probeInternal(CapabilityProbeContext(resource,budget,cancellation),operation,false)
+
+    /** Run identity/metadata probes even when an optional decoder or presentation backend is absent. */
+    fun probeIncludingUnavailable(resource: CapabilityResource, operation: String? = null, budget: ProbeBudget = ProbeBudget(),
+        cancellation: CancellationToken = CancellationToken.NONE): List<DiscoveredCapability> =
+        probeInternal(CapabilityProbeContext(resource,budget,cancellation),operation,true)
 
     /** Delegated probes share the same prefix, cancellation and byte budget. */
-    fun probe(context:CapabilityProbeContext,operation:String?=null):List<DiscoveredCapability> {
+    fun probe(context:CapabilityProbeContext,operation:String?=null):List<DiscoveredCapability> =
+        probeInternal(context,operation,false)
+
+    /** Context overload for metadata/identity callers that also need unavailable implementations. */
+    fun probeIncludingUnavailable(context:CapabilityProbeContext,operation:String?=null):List<DiscoveredCapability> =
+        probeInternal(context,operation,true)
+
+    private fun probeInternal(context:CapabilityProbeContext,operation:String?,includeUnavailable:Boolean):List<DiscoveredCapability> {
         val resource=context.resource
         require(resource.containerDepth <= context.budget.maxDepth) { "Capability probe nesting limit exceeded" }
         return snapshot().sortedBy {it.descriptor.id}.mapNotNull { handler ->
@@ -278,7 +299,7 @@ class CapabilityRegistry(val library: String? = null, private val parent: Capabi
                 catch(_:Exception){return@mapNotNull null}catch(_:LinkageError){return@mapNotNull null}
             if(match.confidence==MatchConfidence.NONE)return@mapNotNull null
             val availability=evaluate(handler)
-            if(availability.state==AvailabilityState.UNAVAILABLE)return@mapNotNull null
+            if(availability.state==AvailabilityState.UNAVAILABLE&&!includeUnavailable)return@mapNotNull null
             val operations=match.operations.intersect(description.operations).let {
                 if(Capability.WRITE in resource.metadata.capabilities)it else it-Operations.WRITE
             }
