@@ -23,8 +23,6 @@ jobs:
         with:
           python-version: '3.12'
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
-      - name: Install pinned Android toolchain
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
       - name: Fetch only declared source dependencies
         run: |
           python3 scripts/fetch-dependencies.py
