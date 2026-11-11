@@ -13,6 +13,12 @@ def main():
     args=parser.parse_args()
     root=Path(__file__).resolve().parents[1]
     lock=json.loads((root/'dependencies.lock.json').read_text())
+    if not args.check:
+        git(root, 'submodule', 'update', '--init', '--recursive')
+    else:
+        states=git(root, 'submodule', 'status', '--recursive', capture=True).splitlines()
+        if any(line.startswith(('-', '+', 'U')) for line in states):
+            raise SystemExit('A declared submodule is missing or differs from its pinned revision')
     directory=root/lock['directory']
     if not directory.resolve().is_relative_to(root):raise SystemExit('Dependency directory must be inside this checkout')
     for name,spec in lock['repositories'].items():
@@ -25,6 +31,8 @@ def main():
             directory.mkdir(parents=True,exist_ok=True)
             subprocess.run(['git','clone',spec['url'],str(target)],check=True)
         current=git(target,'rev-parse','HEAD',capture=True).strip()
+        if args.check and git(target,'status','--porcelain',capture=True).strip():
+            raise SystemExit(f'{name}: dependency checkout contains uncommitted changes')
         if current!=spec['commit']:
             if args.check:raise SystemExit(f'{name}: expected {spec["commit"]}, found {current}')
             if git(target,'status','--porcelain',capture=True).strip():raise SystemExit(f'{name}: refusing to replace local changes')
