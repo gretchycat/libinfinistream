@@ -6,10 +6,10 @@ import java.io.IOException
 /** Bounded reader supplied to metadata parsers. It never materializes the whole resource. */
 class MetadataReadContext(
     val resource: CapabilityResource,
-    private val maxBytes: Long = 1024 * 1024,
-    private val maxReads: Int = 256,
-    private val maxNanos: Long = 1_000_000_000,
-    private val cancellation: CancellationToken = CancellationToken.NONE
+    val maxBytes: Long = 1024 * 1024,
+    val maxReads: Int = 256,
+    val maxNanos: Long = 1_000_000_000,
+    val cancellation: CancellationToken = CancellationToken.NONE
 ) : Closeable {
     private val input: ByteSource
     private val positional: PositionalReadable?
@@ -121,6 +121,6 @@ data class MetadataRecord(
 
 /** Implemented by format handlers that can parse metadata without opening a viewer. */
 interface MetadataCapabilityHandler : CapabilityHandler {
-    fun extractMetadata(context: MetadataReadContext): MetadataRecord?
+    override fun extractMetadata(context: MetadataReadContext): MetadataRecord?
 }
 

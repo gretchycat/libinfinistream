@@ -50,6 +50,56 @@ case selectors. Do not put credentials, source tokens or user preferences here.
 decoders. Domain interfaces add their own presentation/container/extractor markers.
 Metadata/signatures are evidence, not proof that a damaged input will parse.
 
+### Standard format-module calls
+
+Every `CapabilityHandler` inherits the same callable format contract. The three
+format checks are separate operations; none calls or implies either of the others.
+Consumers can call only the evidence they need:
+
+```kotlin
+val suffixMatches = handler.detectExtensions(fileName)             // name only; no source I/O
+val byteMatches = handler.validateMagicBytes(prefixBytes)           // bytes only; no name/MIME lookup
+val record = handler.extractMetadata(metadataContext)               // explicit parser call; nullable
+
+val mimes = handler.mimeTypes()                                     // includes declared wildcards
+val suffixes = handler.extensions()                                 // no leading dots
+val signatures = handler.magicSignatures()
+val destination = handler.viewerTarget()                            // nullable
+val fields = handler.metadataFields()
+val image = handler.thumbnail(ThumbnailRequest(resource, 256))     // nullable
+```
+
+`detectExtensions` examines only the supplied filename suffix and returns every
+matching declared profile. It does not check MIME, bytes, or parse metadata.
+`validateMagicBytes` compares only the supplied byte range with declared
+signatures; it does not inspect the filename or MIME and does not run a parser.
+`extractMetadata` invokes the handler's metadata parser directly; callers do not
+need an extension or signature match first. A returned `MetadataRecord` is
+source-derived parser output, not a result inferred from a suffix or signature.
+All three can be called independently, in any order, or not called at all.
+
+The older `probe` and `normalize` APIs remain available for registry discovery
+and compatibility. They summarize hints/evidence for callers that need a combined
+candidate result; they are not aliases for, nor prerequisites to, these three
+independent format checks. Dynamic handlers should derive format facts from their
+current `describe()` result rather than maintaining a second selector list.
+
+`supportsThumbnail()` reports whether the module advertises the operation. The
+method may still return null for a particular resource, an unsupported backend,
+or content without artwork. Modules that cannot provide thumbnails leave the
+operation out and use the default nullable method. Audio artwork is a valid
+thumbnail source even though the primary data is audio. A returned
+`ThumbnailResult` owns its decoded frame or encoded image lease; close it after
+all readers are closed. Request sources are borrowed, and handlers close only
+handles they opened. Metadata extraction receives a bounded
+`MetadataReadContext`; its cancellation token, byte/read/time budgets and close
+rules apply to the parser.
+
+MIME types, suffixes, signatures, metadata fields and viewer target are module
+facts. Application routing and UI policy remain the caller's responsibility.
+An absent value stays null/empty; a module must not guess format metadata or
+claim a thumbnail merely because the filename looks visual.
+
 `availability()` reports AVAILABLE, CONDITIONAL or UNAVAILABLE with a reason and
 optional dependency booleans. AVAILABLE means the implementation is present, not
 that arbitrary input is valid. CONDITIONAL identifies source/platform/native limits;

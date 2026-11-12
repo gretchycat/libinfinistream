@@ -49,6 +49,12 @@ data class FormatSupport(
     }
 }
 
+/** One suffix-only format match. This result contains no content or metadata validation. */
+data class ExtensionDetection(val format: FormatSupport, val extension: String)
+
+/** One byte-signature match. A signature is evidence only; it does not imply successful parsing. */
+data class MagicValidation(val format: FormatSupport, val signature: MagicSignature)
+
 data class HandlerDescriptor(
     val id: String, val library: String, val title: String,
     val formats: List<FormatSupport>, val operations: Set<String>,
@@ -111,14 +117,197 @@ interface CapabilityHandler {
     /** Dynamic composites may resolve delegated formats without changing stable identity. */
     fun describe(): HandlerDescriptor = descriptor
     fun availability(): HandlerAvailability = HandlerAvailability()
+
+    /**
+     * Match filename suffixes only. This method does not inspect MIME hints, open a source,
+     * validate bytes, or extract metadata. Multiple profiles may match and are all returned.
+     */
+    fun detectExtensions(fileName: String): List<ExtensionDetection> {
+        val name = fileName.lowercase(Locale.ROOT)
+        return describe().formats.flatMap { format ->
+            format.extensions.mapNotNull { declared ->
+                val extension = declared.trim().removePrefix(".").lowercase(Locale.ROOT)
+                if (extension.isNotEmpty() && name.endsWith(".$extension")) {
+                    ExtensionDetection(format, extension)
+                } else null
+            }
+        }.sortedWith(compareByDescending<ExtensionDetection> { it.extension.length }.thenBy { it.extension })
+    }
+
+    /**
+     * Validate only the supplied bytes against this module's declared signatures. This method
+     * does not inspect a filename or MIME hint, open a source, or invoke a parser. An empty result
+     * means none of the declared signatures matched the supplied byte range.
+     */
+    fun validateMagicBytes(bytes: ByteArray): List<MagicValidation> = describe().formats.flatMap { format ->
+        format.magic.filter { it.matches(bytes) }.map { signature -> MagicValidation(format, signature) }
+    }
+
     fun probe(context: CapabilityProbeContext): HandlerProbe {
-        val score = descriptor.formats.maxOfOrNull { it.score(context.resource) } ?: 0
-        val signatures = descriptor.formats.flatMap { it.magic }
-        val signature = signatures.isNotEmpty() && context.resource.source != null && signatures.any { it.matches(context.prefix()) }
-        return HandlerProbe(if (signature) MatchConfidence.SIGNATURE else if (score > 0) MatchConfidence.CANDIDATE else MatchConfidence.NONE,
-            descriptor.operations)
+        val current = describe()
+        val score = current.formats.maxOfOrNull { it.score(context.resource) } ?: 0
+        val prefix = if (context.resource.source != null && current.formats.any { it.magic.isNotEmpty() }) context.prefix() else ByteArray(0)
+        val matched = current.formats.flatMap { profile -> profile.magic.filter { it.matches(prefix) }.map { profile to it } }
+        val detectedMimes = matched.flatMap { (profile, _) -> profile.mimeTypes }
+            .filterNot { it.contains('*') }.toSet()
+        val metadata = if (detectedMimes.size == 1) mapOf("mimeType" to detectedMimes.single()) else emptyMap()
+        val evidence = matched.firstOrNull()?.second?.description?.takeIf(String::isNotBlank)
+        return HandlerProbe(if (matched.isNotEmpty()) MatchConfidence.SIGNATURE else if (score > 0) MatchConfidence.CANDIDATE else MatchConfidence.NONE,
+            current.operations, evidence, metadata)
     }
     fun <T : Any> service(type: Class<T>): T? = if (type.isInstance(this)) type.cast(this) else null
+
+    /** Return normalized identity and operation facts for this handler's best matching format profile. */
+    fun normalize(context: CapabilityProbeContext): NormalizedFormat? = normalizeFormat(this, context)
+
+    /** Return the MIME types this handler can parse, decode, or process. Wildcards remain explicit. */
+    fun mimeTypes(): Set<String> = describe().formats.flatMapTo(sortedSetOf()) { it.mimeTypes }
+
+    /** Return the filename extensions this handler recognizes, without a leading dot. */
+    fun extensions(): Set<String> = describe().formats.flatMapTo(sortedSetOf()) { it.extensions }
+
+    /** Return signatures this handler uses for content identification. */
+    fun magicSignatures(): List<MagicSignature> = describe().formats.flatMap { it.magic }.distinct()
+
+    /** Return the preferred consumer declared by the format module, if any. */
+    fun viewerTarget(): ViewerTarget? = ViewerTarget.from(describe().attributes)
+
+    /** Report whether this handler declares thumbnail production; actual generation may still return null. */
+    fun supportsThumbnail(): Boolean = Operations.THUMBNAIL in describe().operations
+
+    /** Return a visual representation when available; unsupported, absent, or undecodable artwork is null. */
+    fun thumbnail(request: ThumbnailRequest): ThumbnailResult? = null
+
+    /** Return the metadata fields advertised by this handler. */
+    fun metadataFields(): Set<String> = describe().metadata
+
+    /** Extract format metadata when this handler implements the metadata contract; otherwise return null. */
+    fun extractMetadata(context: MetadataReadContext): MetadataRecord? =
+        (this as? MetadataCapabilityHandler)?.extractMetadata(context)
+}
+
+/** Preferred ecosystem consumer. Values are stable IDs, not Android component names. */
+enum class ViewerTarget {
+    INFINIFOLDER, INFINISCRIBE, INFINIMEDIA, EXTERNAL;
+
+    companion object {
+        /** Resolve an explicit target, accepting legacy presentation attributes during migration. */
+        fun from(attributes: Map<String, String>): ViewerTarget? {
+            val explicit = attributes["viewerTarget"]?.trim()?.lowercase(Locale.ROOT)
+            if (!explicit.isNullOrEmpty()) return when (explicit) {
+                "infinifolder", "folder", "image", "hex", "archive" -> INFINIFOLDER
+                "infiniscribe", "scribe", "document" -> INFINISCRIBE
+                "infinimedia", "media", "audio", "video" -> INFINIMEDIA
+                "external" -> EXTERNAL
+                else -> null
+            }
+            return when (attributes["presentation"]?.trim()?.lowercase(Locale.ROOT)) {
+                "image", "hex", "archive", "container" -> INFINIFOLDER
+                "text", "markdown", "html", "spreadsheet", "epub", "pdf", "font" -> INFINISCRIBE
+                "audio", "video" -> INFINIMEDIA
+                else -> null
+            }
+        }
+    }
+}
+
+/** Normalized result from one format module; overlapping handlers remain separate results. */
+data class NormalizedFormat(
+    val handlerId: String,
+    val library: String,
+    val title: String,
+    val mimeType: String?,
+    val extension: String?,
+    val mimeTypes: Set<String>,
+    val extensions: Set<String>,
+    val confidence: MatchConfidence,
+    val operations: Set<String>,
+    val viewerTarget: ViewerTarget?,
+    val thumbnailSupported: Boolean,
+    val metadataFields: Set<String>,
+    val evidence: String? = null,
+    val metadata: Map<String, String> = emptyMap()
+)
+
+/** Bounded thumbnail request shared by image, video, document, and artwork modules. */
+data class ThumbnailRequest(
+    val resource: CapabilityResource,
+    val targetPixels: Int,
+    val cancellation: CancellationToken = CancellationToken.NONE
+) {
+    init { require(targetPixels > 0) { "Thumbnail size must be positive" } }
+}
+
+/** A thumbnail can be an already decoded frame or an encoded image source for a downstream renderer. */
+class ThumbnailResult private constructor(
+    val frame: StreamHandle?,
+    val encodedImage: SourceResource?,
+    private val owner: java.io.Closeable?
+) : java.io.Closeable {
+    private var closed = false
+    init { require((frame == null) xor (encodedImage == null)) { "A thumbnail must contain exactly one image representation" } }
+
+    @Synchronized override fun close() {
+        if (closed) return
+        closed = true
+        try { frame?.close() } finally { owner?.close() }
+    }
+
+    companion object {
+        /** Transfer ownership of a decoded frame to the thumbnail result. */
+        @JvmStatic fun frame(frame: StreamHandle): ThumbnailResult = ThumbnailResult(frame, null, null)
+
+        /** Return an encoded image source and retain an optional owner until the result is closed. */
+        @JvmStatic @JvmOverloads fun encoded(resource: SourceResource, owner: java.io.Closeable? = null): ThumbnailResult =
+            ThumbnailResult(null, resource, owner)
+    }
+}
+
+private fun normalizeFormat(handler: CapabilityHandler, context: CapabilityProbeContext): NormalizedFormat? {
+    val descriptor = handler.describe()
+    val match = handler.probe(context)
+    if (match.confidence == MatchConfidence.NONE) return null
+    val resource = context.resource
+    val reportedMime = match.metadata["mimeType"]?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT)
+    fun FormatSupport.declares(mime: String): Boolean = mimeTypes.any { declared ->
+        declared.equals(mime, true) || declared.endsWith("/*") && mime.startsWith(declared.dropLast(1))
+    }
+    val reportedProfile = reportedMime?.let { mime ->
+        descriptor.formats.firstOrNull { format -> format.mimeTypes.any { it.equals(mime, true) } }
+            ?: descriptor.formats.firstOrNull { it.declares(mime) }
+    }
+    val signatureProfile = if (match.confidence >= MatchConfidence.SIGNATURE && resource.source != null) {
+        val prefix = context.prefix()
+        descriptor.formats.firstOrNull { format -> format.magic.any { it.matches(prefix) } }
+    } else null
+    val profile = reportedProfile ?: signatureProfile ?: descriptor.formats.maxByOrNull { it.score(resource) }
+    val rawMime = reportedMime
+        ?: resource.metadata.content.mimeType?.takeIf { candidate ->
+            val mime = candidate.substringBefore(';').trim().lowercase(Locale.ROOT)
+            descriptor.formats.any { format -> format.declares(mime) }
+        }
+        ?: profile?.mimeTypes?.singleOrNull { !it.contains('*') }
+    val lowerName = resource.metadata.name?.lowercase(Locale.ROOT).orEmpty()
+    val extension = profile?.extensions?.asSequence()
+        ?.filter { lowerName.endsWith(".$it") }
+        ?.sortedByDescending(String::length)
+        ?.firstOrNull()
+    return NormalizedFormat(
+        handlerId = descriptor.id,
+        library = descriptor.library,
+        title = descriptor.title,
+        mimeType = rawMime?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT),
+        extension = extension,
+        mimeTypes = profile?.mimeTypes.orEmpty(),
+        extensions = profile?.extensions.orEmpty(),
+        confidence = match.confidence,
+        operations = match.operations.intersect(descriptor.operations),
+        viewerTarget = handler.viewerTarget(),
+        thumbnailSupported = Operations.THUMBNAIL in descriptor.operations,
+        metadataFields = descriptor.metadata,
+        evidence = match.reason,
+        metadata = match.metadata
+    )
 }
 
 /** Providers must be cheap to construct; no context, network, native initialization or app required. */
@@ -131,12 +320,33 @@ interface CapabilityProvider {
 open class ServiceCapabilityHandler(override val descriptor: HandlerDescriptor, private val delegate: Any,
     private val runtime: () -> HandlerAvailability = { HandlerAvailability() }) : CapabilityHandler {
     override fun availability() = runtime()
+    override fun detectExtensions(fileName: String): List<ExtensionDetection> =
+        (delegate as? CapabilityHandler)?.detectExtensions(fileName) ?: super.detectExtensions(fileName)
+    override fun validateMagicBytes(bytes: ByteArray): List<MagicValidation> =
+        (delegate as? CapabilityHandler)?.validateMagicBytes(bytes) ?: super.validateMagicBytes(bytes)
+    override fun probe(context: CapabilityProbeContext): HandlerProbe {
+        val implementation = delegate as? CapabilityHandler ?: return super.probe(context)
+        val result = implementation.probe(context)
+        return result.copy(operations = result.operations.intersect(describe().operations))
+    }
+    override fun thumbnail(request: ThumbnailRequest): ThumbnailResult? =
+        (delegate as? CapabilityHandler)?.thumbnail(request)
+    override fun extractMetadata(context: MetadataReadContext): MetadataRecord? =
+        (delegate as? CapabilityHandler)?.extractMetadata(context)
     override fun <T : Any> service(type: Class<T>): T? = if(type.isInstance(delegate)) type.cast(delegate) else super.service(type)
 }
 
 /** Platform services are constructed on invocation, not while enumerating metadata. */
 class LazyServiceCapabilityHandler(override val descriptor:HandlerDescriptor,create:()->Any):CapabilityHandler {
     private val delegate by lazy(create)
+    override fun detectExtensions(fileName:String):List<ExtensionDetection> =
+        (delegate as? CapabilityHandler)?.detectExtensions(fileName) ?: super.detectExtensions(fileName)
+    override fun validateMagicBytes(bytes:ByteArray):List<MagicValidation> =
+        (delegate as? CapabilityHandler)?.validateMagicBytes(bytes) ?: super.validateMagicBytes(bytes)
+    override fun thumbnail(request:ThumbnailRequest):ThumbnailResult? =
+        (delegate as? CapabilityHandler)?.thumbnail(request)
+    override fun extractMetadata(context:MetadataReadContext):MetadataRecord? =
+        (delegate as? CapabilityHandler)?.extractMetadata(context)
     override fun <T:Any> service(type:Class<T>):T?=if(type.isInstance(delegate))type.cast(delegate)else super.service(type)
 }
 
